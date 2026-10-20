@@ -69,14 +69,10 @@ output application/java
             <sftp:content><![CDATA[#[output application/json --- vars.summary]]]></sftp:content>
         </sftp:write>
 
-        <choice doc:name="Any rejects?">
-            <when expression="#[not isEmpty(vars.rejects)]">
-                <sftp:write doc:name="Write rejects" config-ref="sftp-config" createParentDirectories="true"
-                            path="#[p('sftp.dirs.outbound') ++ '/' ++ dw::modules::Payments::outputFileName(vars.run.fileName, 'rejects.csv')]">
-                    <sftp:content><![CDATA[#[output application/csv header=true --- vars.rejects map dw::modules::Payments::toRejectsCsvRow($)]]]></sftp:content>
-                </sftp:write>
-            </when>
-        </choice>
+        <sftp:write doc:name="Write rejects" config-ref="sftp-config" createParentDirectories="true"
+                    path="#[p('sftp.dirs.outbound') ++ '/' ++ dw::modules::Payments::outputFileName(vars.run.fileName, 'rejects.csv')]">
+            <sftp:content><![CDATA[#[dw::modules::Payments::rejectsCsv(vars.rejects)]]]></sftp:content>
+        </sftp:write>
 
         <os:store doc:name="Watermark: record outcome" key="#[vars.run.fileName]" objectStore="processed-files-store">
             <os:value><![CDATA[#[{

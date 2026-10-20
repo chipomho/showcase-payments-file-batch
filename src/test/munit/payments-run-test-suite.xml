@@ -116,7 +116,7 @@
                 </munit-tools:with-attributes>
                 <munit-tools:before-call>
                     <munit-tools:queue doc:name="Rejects CSV" queueName="rejects-csv">
-                        <munit-tools:value><![CDATA[#[write(vars.rejects map dw::modules::Payments::toRejectsCsvRow($), 'application/csv', { header: true })]]]></munit-tools:value>
+                        <munit-tools:value><![CDATA[#[dw::modules::Payments::rejectsCsv(vars.rejects)]]]></munit-tools:value>
                     </munit-tools:queue>
                 </munit-tools:before-call>
             </munit-tools:spy>

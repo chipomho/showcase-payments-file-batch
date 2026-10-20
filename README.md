@@ -79,8 +79,9 @@ cannot insert a line twice. `maxFailedRecords="-1"` keeps the job going when a b
 - `payments_20261020.summary.json`: run id, file name, archive path, total, loaded, rejected
   and failed counts, the loaded amount, timings and a status (`COMPLETED`,
   `COMPLETED_WITH_REJECTS` or `COMPLETED_WITH_ERRORS`);
-- `payments_20261020.rejects.csv`, when any row was rejected: the original values, line
-  number and the reasons separated by `|`.
+- `payments_20261020.rejects.csv`: the original values, line number and the reasons
+  separated by `|` for every rejected row. It is written on every run, header only when
+  nothing was rejected, so the sender always gets the same pair of files back.
 
 **Errors and correlation.** `common/error-handling.xml` holds `file-pickup-error-handler`,
 which decides between `/duplicates` and `/error` and handles the watermark release. Moving
@@ -123,13 +124,13 @@ src/test/resources/fixtures/ payment files and database rows
   asynchronous, and an assertion inside a step would only fail that record, so spies copy
   what the bulk inserts and file writes receive onto MUnit queues, and the test asserts on
   them after On Complete has finished: which lines were loaded and rejected and why, the
-  summary counts and control total, the rejects header, the final watermark status and the
+  summary counts and control total, the rejects file, the final watermark status and the
   cleaned-up run context.
 - `payments-pickup-test-suite`: a repeated file name goes to `/duplicates` and leaves the
   earlier watermark alone; a file with the wrong columns goes to `/error` and releases its
   name; an archive failure releases the name and starts no job.
 - `payments-rules-test-suite`: ABN, BSB, amount, date and file-level rules, reject column
-  widths and output file names.
+  widths, the header-only rejects file and output file names.
 
 SFTP and database operations are mocked by `doc:name`. Run the suites from Studio or with
 `mvn clean test`; Batch is an Enterprise feature, so the command-line run needs credentials

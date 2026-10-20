@@ -155,6 +155,9 @@ fun toRejectParameters(record: Object): Object = {
    Run outcome
    --------------------------------------------------------------------------------------- */
 
+var REJECTS_COLUMNS = ["line_number", "payment_reference", "payee_name", "payee_abn", "bsb",
+                       "account_number", "amount", "payment_date", "reasons"]
+
 fun toRejectsCsvRow(row: Object): Object = {
     line_number: row.line_number,
     payment_reference: row.payment_reference,
@@ -166,6 +169,14 @@ fun toRejectsCsvRow(row: Object): Object = {
     payment_date: row.payment_date,
     reasons: row.reasons
 }
+
+/**
+ * The rejects file is always written, so the sender always gets a pair of files back.
+ * With nothing rejected it holds just the header.
+ */
+fun rejectsCsv(rows: Array): String =
+    if (isEmpty(rows)) (REJECTS_COLUMNS joinBy ",") ++ "\n"
+    else write(rows map toRejectsCsvRow($), "application/csv", { header: true }) as String
 
 fun runStatus(failedRecords: Number, rejectedRecords: Number): String =
     if (failedRecords > 0) "COMPLETED_WITH_ERRORS"
