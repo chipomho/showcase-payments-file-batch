@@ -1,0 +1,118 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xmlns:sftp="http://www.mulesoft.org/schema/mule/sftp"
+      xmlns:os="http://www.mulesoft.org/schema/mule/os"
+      xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+      xmlns:tracing="http://www.mulesoft.org/schema/mule/tracing"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/sftp http://www.mulesoft.org/schema/mule/sftp/current/mule-sftp.xsd
+        http://www.mulesoft.org/schema/mule/os http://www.mulesoft.org/schema/mule/os/current/mule-os.xsd
+        http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd
+        http://www.mulesoft.org/schema/mule/tracing http://www.mulesoft.org/schema/mule/tracing/current/mule-tracing.xsd">
+
+    <!--
+        Scheduled poll of /inbound for CSV files. Each file gets a run id, which is used as the
+        correlation id, the batch job instance id and the key for everything the run writes.
+
+        Order matters: the file is read into memory and archived before the batch job starts,
+        so once records are queued for loading the file is already out of /inbound and cannot
+        be picked up again.
+    -->
+    <flow name="payments-file-pickup">
+        <sftp:listener doc:name="Inbound payment files" config-ref="sftp-config"
+                       directory="${sftp.dirs.inbound}"
+                       watermarkEnabled="false"
+                       autoDelete="false"
+                       timeBetweenSizeCheck="${sftp.poll.sizeCheckMs}"
+                       timeBetweenSizeCheckUnit="MILLISECONDS"
+                       outputMimeType="application/csv; header=true"
+                       primaryNodeOnly="true">
+            <sftp:matcher filenamePattern="*.csv" caseSensitive="false" directories="EXCLUDE"/>
+            <scheduling-strategy>
+                <fixed-frequency frequency="${sftp.poll.frequencyMs}"/>
+            </scheduling-strategy>
+        </sftp:listener>
+
+        <ee:transform doc:name="Run context">
+            <ee:variables>
+                <ee:set-variable variableName="file"><![CDATA[%dw 2.0
+output application/java
+---
+{
+    name: attributes.fileName,
+    path: attributes.path,
+    size: attributes.size,
+    receivedAt: now() as String { format: "yyyy-MM-dd'T'HH:mm:ss.SSSXXX" }
+}]]></ee:set-variable>
+                <ee:set-variable variableName="runId"><![CDATA[%dw 2.0
+output application/java
+---
+"PAY-" ++ (now() as String { format: "yyyyMMdd-HHmmss" }) ++ "-" ++ upper(uuid()[0 to 7])]]></ee:set-variable>
+            </ee:variables>
+        </ee:transform>
+
+        <tracing:with-correlation-id doc:name="Correlate on run id" correlationId="#[vars.runId]">
+            <tracing:set-logging-variable doc:name="fileName in every log line" variableName="fileName" value="#[vars.file.name]"/>
+            <logger doc:name="File received" level="INFO" category="au.chipomho.payments.pickup"
+                    message="#[output application/json indent=false --- { event: 'file.received', runId: vars.runId, file: vars.file.name, bytes: vars.file.size }]"/>
+
+            <try doc:name="Claim the file name">
+                <os:store doc:name="Watermark: claim file name" key="#[vars.file.name]" objectStore="processed-files-store"
+                          failIfPresent="true">
+                    <os:value><![CDATA[#[{ runId: vars.runId, status: 'LOADING', receivedAt: vars.file.receivedAt }]]]></os:value>
+                </os:store>
+                <set-variable doc:name="This run owns the name" variableName="fileNameClaimed" value="#[true]"/>
+                <error-handler>
+                    <on-error-propagate doc:name="Seen before" type="OS:KEY_ALREADY_EXISTS" logException="false">
+                        <raise-error doc:name="Duplicate file" type="PAYMENTS:DUPLICATE_FILE"
+                                     description="#['File ' ++ vars.file.name ++ ' has already been processed']"/>
+                    </on-error-propagate>
+                </error-handler>
+            </try>
+
+            <ee:transform doc:name="CSV rows to payment records">
+                <ee:message>
+                    <ee:set-payload resource="dw/mappings/csv-to-payment-records.dwl"/>
+                </ee:message>
+                <ee:variables>
+                    <ee:set-variable variableName="fileProblems"><![CDATA[%dw 2.0
+output application/java
+import fileProblems from dw::modules::Payments
+---
+fileProblems(payload)]]></ee:set-variable>
+                </ee:variables>
+            </ee:transform>
+            <choice doc:name="Usable file?">
+                <when expression="#[not isEmpty(vars.fileProblems)]">
+                    <raise-error doc:name="Invalid file" type="PAYMENTS:INVALID_FILE"
+                                 description="#[vars.fileProblems joinBy '; ']"/>
+                </when>
+            </choice>
+
+            <sftp:move doc:name="Archive file" config-ref="sftp-config"
+                       sourcePath="#[vars.file.path]"
+                       targetPath="${sftp.dirs.archive}"
+                       renameTo="#[vars.runId ++ '_' ++ vars.file.name]"
+                       createParentDirectories="true"
+                       overwrite="false"/>
+
+            <os:store doc:name="Remember run context" key="#[vars.runId]" objectStore="batch-run-store">
+                <os:value><![CDATA[#[{
+                    runId: vars.runId,
+                    fileName: vars.file.name,
+                    archivedAs: p('sftp.dirs.archive') ++ '/' ++ vars.runId ++ '_' ++ vars.file.name,
+                    receivedAt: vars.file.receivedAt,
+                    rowCount: sizeOf(payload)
+                }]]]></os:value>
+            </os:store>
+
+            <flow-ref doc:name="Start batch job" name="load-payments-batch"/>
+        </tracing:with-correlation-id>
+
+        <error-handler ref="file-pickup-error-handler"/>
+    </flow>
+
+</mule>

@@ -1,0 +1,24 @@
+[
+  {
+    "line_number": 4,
+    "payment_reference": "INV-20261020-003",
+    "payee_name": "Gibber Plains Fuel",
+    "payee_abn": "12345678901",
+    "bsb": "062-000",
+    "account_number": "11223344",
+    "amount": "880.00",
+    "payment_date": "2026-10-21",
+    "reasons": "INVALID_ABN"
+  },
+  {
+    "line_number": 6,
+    "payment_reference": "INV-20261020-005",
+    "payee_name": "Mulga Electrical",
+    "payee_abn": "85900000004",
+    "bsb": "06-2000",
+    "account_number": "4455",
+    "amount": "0.00",
+    "payment_date": "2026-10-22",
+    "reasons": "INVALID_BSB|INVALID_ACCOUNT_NUMBER|INVALID_AMOUNT"
+  }
+]

@@ -1,0 +1,123 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xmlns:munit="http://www.mulesoft.org/schema/mule/munit"
+      xmlns:munit-tools="http://www.mulesoft.org/schema/mule/munit-tools"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/munit http://www.mulesoft.org/schema/mule/munit/current/mule-munit.xsd
+        http://www.mulesoft.org/schema/mule/munit-tools http://www.mulesoft.org/schema/mule/munit-tools/current/mule-munit-tools.xsd">
+
+    <!-- The validation functions in dw::modules::Payments on their own. -->
+    <munit:config name="payments-rules-test-suite.xml"/>
+
+    <munit:test name="abn-check-digits" description="Weights 10,1,3,...,19 after subtracting 1 from the first digit, mod 89">
+        <munit:execution>
+            <set-payload doc:name="Check" value="#[{
+                atoWorkedExample: dw::modules::Payments::isValidAbn('51 824 753 556'),
+                synthetic: dw::modules::Payments::isValidAbn('53900000001'),
+                lastDigitChanged: dw::modules::Payments::isValidAbn('51824753557'),
+                tooShort: dw::modules::Payments::isValidAbn('5182475355'),
+                letters: dw::modules::Payments::isValidAbn('51 824 753 55A'),
+                missing: dw::modules::Payments::isValidAbn(null)
+            }]"/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-that doc:name="Results" expression="#[payload]"
+                                     is="#[MunitTools::equalTo({
+                                         atoWorkedExample: true,
+                                         synthetic: true,
+                                         lastDigitChanged: false,
+                                         tooShort: false,
+                                         letters: false,
+                                         missing: false
+                                     })]"/>
+        </munit:validation>
+    </munit:test>
+
+    <munit:test name="bsb-format" description="Six digits, with or without the hyphen after the third">
+        <munit:execution>
+            <set-payload doc:name="Check" value="#[['062-000', '062000', '06-2000', '0620001', ''] map dw::modules::Payments::isValidBsb($)]"/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-that doc:name="Results" expression="#[payload]"
+                                     is="#[MunitTools::equalTo([true, true, false, false, false])]"/>
+        </munit:validation>
+    </munit:test>
+
+    <munit:test name="amount-must-be-positive-with-two-decimals" description="Zero, negative, three decimals and text are rejected">
+        <munit:execution>
+            <set-payload doc:name="Check" value="#[['1520.00', '7', '0.00', '-5.00', '10.005', '1,520.00', 'abc', ''] map dw::modules::Payments::isValidAmount($)]"/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-that doc:name="Results" expression="#[payload]"
+                                     is="#[MunitTools::equalTo([true, true, false, false, false, false, false, false])]"/>
+        </munit:validation>
+    </munit:test>
+
+    <munit:test name="row-reasons-are-collected" description="Every failing rule contributes a reason code">
+        <munit:execution>
+            <set-payload doc:name="Validate" value="#[dw::modules::Payments::validationErrors(
+                dw::modules::Payments::toPaymentRecord({
+                    payment_reference: '',
+                    payee_name: 'Mulga Electrical',
+                    payee_abn: '85900000004',
+                    bsb: '06-2000',
+                    account_number: '4455',
+                    amount: '0.00',
+                    payment_date: '2026-13-01'
+                }, 9, 'PAY-TEST', 'test.csv'))]"/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-that doc:name="Reasons" expression="#[payload]"
+                                     is="#[MunitTools::equalTo(['INVALID_REFERENCE', 'INVALID_BSB', 'INVALID_ACCOUNT_NUMBER', 'INVALID_AMOUNT', 'INVALID_PAYMENT_DATE'])]"/>
+        </munit:validation>
+    </munit:test>
+
+    <munit:test name="missing-columns-make-the-file-unusable" description="Header problems are reported once for the file">
+        <munit:execution>
+            <set-payload doc:name="Check" value="#[{
+                wrongColumns: dw::modules::Payments::fileProblems([{ reference: 'X', payee: 'Y', bsb: '062-000' }]),
+                empty: dw::modules::Payments::fileProblems([])
+            }]"/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-that doc:name="Problems" expression="#[payload]"
+                                     is="#[MunitTools::equalTo({
+                                         wrongColumns: ['missing columns: payment_reference, payee_name, payee_abn, account_number, amount, payment_date'],
+                                         empty: ['the file has no payment rows']
+                                     })]"/>
+        </munit:validation>
+    </munit:test>
+
+    <munit:test name="reject-values-are-cut-to-column-width" description="A malformed row can always be written to payment_reject">
+        <munit:execution>
+            <set-payload doc:name="Reject parameters" value="#[dw::modules::Payments::toRejectParameters({
+                runId: 'PAY-TEST', fileName: 'test.csv', lineNumber: 7,
+                paymentReference: 'R', payeeName: 'P', payeeAbn: '1', bsb: '1',
+                accountNumber: '1', amount: '123456789012345678901234567890', paymentDate: 'x',
+                reasons: ['INVALID_AMOUNT', 'INVALID_PAYMENT_DATE']
+            })]"/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-that doc:name="Amount cut to 20" expression="#[sizeOf(payload.amount)]" is="#[MunitTools::equalTo(20)]"/>
+            <munit-tools:assert-that doc:name="Reasons joined" expression="#[payload.reasons]"
+                                     is="#[MunitTools::equalTo('INVALID_AMOUNT|INVALID_PAYMENT_DATE')]"/>
+        </munit:validation>
+    </munit:test>
+
+    <munit:test name="output-file-names" description="Outbound files are named after the inbound file">
+        <munit:execution>
+            <set-payload doc:name="Names" value="#[[
+                dw::modules::Payments::outputFileName('payments_20261020.csv', 'summary.json'),
+                dw::modules::Payments::outputFileName('PAYMENTS_20261020.CSV', 'rejects.csv')
+            ]]"/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-that doc:name="Names" expression="#[payload]"
+                                     is="#[MunitTools::equalTo(['payments_20261020.summary.json', 'PAYMENTS_20261020.rejects.csv'])]"/>
+        </munit:validation>
+    </munit:test>
+
+</mule>

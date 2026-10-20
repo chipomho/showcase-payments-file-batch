@@ -1,0 +1,6 @@
+# MUnit only. Unencrypted dummy values are passed through as-is by the secure properties
+# module, and no test reaches a real SFTP server or database.
+sftp:
+  keyPassphrase: "not-a-real-passphrase"
+db:
+  password: "not-a-real-password"

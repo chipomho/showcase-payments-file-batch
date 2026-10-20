@@ -1,0 +1,191 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xmlns:munit="http://www.mulesoft.org/schema/mule/munit"
+      xmlns:munit-tools="http://www.mulesoft.org/schema/mule/munit-tools"
+      xmlns:os="http://www.mulesoft.org/schema/mule/os"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/munit http://www.mulesoft.org/schema/mule/munit/current/mule-munit.xsd
+        http://www.mulesoft.org/schema/mule/munit-tools http://www.mulesoft.org/schema/mule/munit-tools/current/mule-munit-tools.xsd
+        http://www.mulesoft.org/schema/mule/os http://www.mulesoft.org/schema/mule/os/current/mule-os.xsd">
+
+    <!--
+        A whole run: pickup, the asynchronous batch job and On Complete. Assertions inside a
+        batch step would only fail that record, so spies copy what they see onto MUnit
+        queues and the test thread asserts on the queues once the run has finished.
+    -->
+    <munit:config name="payments-run-test-suite.xml"/>
+
+    <munit:before-test name="payments-run-reset" description="Empty object stores and queues">
+        <os:clear doc:name="Clear watermark" objectStore="processed-files-store"/>
+        <os:clear doc:name="Clear run context" objectStore="batch-run-store"/>
+    </munit:before-test>
+
+    <munit:test name="file-is-validated-loaded-and-reported" timeOut="120000"
+                description="Three good rows loaded, two rejected with reasons, summary and rejects written, watermark completed">
+        <munit:behavior>
+            <munit-tools:mock-when doc:name="Archive" processor="sftp:move">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="Archive file"/>
+                </munit-tools:with-attributes>
+            </munit-tools:mock-when>
+
+            <munit-tools:mock-when doc:name="Payments insert" processor="db:bulk-insert">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="Bulk insert payments"/>
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:payload value="#[[1, 1, 1]]" mediaType="application/java"/>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+            <munit-tools:spy doc:name="Capture loaded rows" processor="db:bulk-insert">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="Bulk insert payments"/>
+                </munit-tools:with-attributes>
+                <munit-tools:before-call>
+                    <munit-tools:queue doc:name="Loaded" queueName="loaded-rows">
+                        <munit-tools:value><![CDATA[#[output application/java --- payload map dw::modules::Payments::toInsertParameters($)]]]></munit-tools:value>
+                    </munit-tools:queue>
+                </munit-tools:before-call>
+            </munit-tools:spy>
+
+            <munit-tools:mock-when doc:name="Rejects insert" processor="db:bulk-insert">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="Bulk insert rejects"/>
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:payload value="#[[1, 1]]" mediaType="application/java"/>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+            <munit-tools:spy doc:name="Capture rejected rows" processor="db:bulk-insert">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="Bulk insert rejects"/>
+                </munit-tools:with-attributes>
+                <munit-tools:before-call>
+                    <munit-tools:queue doc:name="Rejected" queueName="rejected-rows">
+                        <munit-tools:value><![CDATA[#[output application/java --- payload map dw::modules::Payments::toRejectParameters($)]]]></munit-tools:value>
+                    </munit-tools:queue>
+                </munit-tools:before-call>
+            </munit-tools:spy>
+
+            <munit-tools:mock-when doc:name="Loaded totals" processor="db:select">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="Loaded totals"/>
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:payload value="#[readUrl('classpath://fixtures/db/loaded-totals.json', 'application/json')]"
+                                         mediaType="application/java"/>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+            <munit-tools:mock-when doc:name="Rejected rows" processor="db:select">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="Rejected rows"/>
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:payload value="#[readUrl('classpath://fixtures/db/reject-rows.json', 'application/json')]"
+                                         mediaType="application/java"/>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+
+            <munit-tools:mock-when doc:name="Summary file" processor="sftp:write">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="Write summary"/>
+                </munit-tools:with-attributes>
+            </munit-tools:mock-when>
+            <munit-tools:spy doc:name="Capture summary" processor="sftp:write">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="Write summary"/>
+                </munit-tools:with-attributes>
+                <munit-tools:before-call>
+                    <munit-tools:queue doc:name="Summary" queueName="summary">
+                        <munit-tools:value><![CDATA[#[vars.summary]]]></munit-tools:value>
+                    </munit-tools:queue>
+                </munit-tools:before-call>
+            </munit-tools:spy>
+
+            <munit-tools:mock-when doc:name="Rejects file" processor="sftp:write">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="Write rejects"/>
+                </munit-tools:with-attributes>
+            </munit-tools:mock-when>
+            <munit-tools:spy doc:name="Capture rejects file" processor="sftp:write">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="Write rejects"/>
+                </munit-tools:with-attributes>
+                <munit-tools:before-call>
+                    <munit-tools:queue doc:name="Rejects CSV" queueName="rejects-csv">
+                        <munit-tools:value><![CDATA[#[write(vars.rejects map dw::modules::Payments::toRejectsCsvRow($), 'application/csv', { header: true })]]]></munit-tools:value>
+                    </munit-tools:queue>
+                </munit-tools:before-call>
+            </munit-tools:spy>
+
+            <munit-tools:spy doc:name="Run finished" processor="logger">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="Run complete"/>
+                </munit-tools:with-attributes>
+                <munit-tools:after-call>
+                    <munit-tools:queue doc:name="Done" queueName="run-complete">
+                        <munit-tools:value><![CDATA[#[vars.run.runId]]]></munit-tools:value>
+                    </munit-tools:queue>
+                </munit-tools:after-call>
+            </munit-tools:spy>
+        </munit:behavior>
+
+        <munit:execution>
+            <munit:set-event doc:name="File from the SFTP listener">
+                <munit:payload value="#[MunitTools::getResourceAsString('fixtures/files/payments_20261020.csv')]"
+                               mediaType="application/csv"/>
+                <munit:attributes value="#[{ fileName: 'payments_20261020.csv', path: '/inbound/payments_20261020.csv', size: 641 }]"/>
+            </munit:set-event>
+            <flow-ref doc:name="payments-file-pickup" name="payments-file-pickup"/>
+
+            <munit-tools:dequeue doc:name="Wait for On Complete" queueName="run-complete" timeout="90" timeoutUnit="SECONDS"
+                                 target="runId"/>
+            <munit-tools:dequeue doc:name="Loaded rows" queueName="loaded-rows" timeout="5" timeoutUnit="SECONDS" target="loadedRows"/>
+            <munit-tools:dequeue doc:name="Rejected rows" queueName="rejected-rows" timeout="5" timeoutUnit="SECONDS" target="rejectedRows"/>
+            <munit-tools:dequeue doc:name="Summary" queueName="summary" timeout="5" timeoutUnit="SECONDS" target="summary"/>
+            <munit-tools:dequeue doc:name="Rejects CSV" queueName="rejects-csv" timeout="5" timeoutUnit="SECONDS" target="rejectsCsv"/>
+            <os:retrieve doc:name="Watermark entry" key="payments_20261020.csv" objectStore="processed-files-store" target="watermark"/>
+            <os:retrieve-all-keys doc:name="Run context keys" objectStore="batch-run-store" target="runContextKeys"/>
+        </munit:execution>
+
+        <munit:validation>
+            <munit-tools:assert-that doc:name="Good rows loaded" expression="#[vars.loadedRows.lineNumber]"
+                                     is="#[MunitTools::equalTo([2, 3, 5])]"/>
+            <munit-tools:assert-that doc:name="BSB normalised" expression="#[vars.loadedRows[1].bsb]"
+                                     is="#[MunitTools::equalTo('083-170')]"/>
+            <munit-tools:assert-that doc:name="ABN spaces removed" expression="#[vars.loadedRows[0].payeeAbn]"
+                                     is="#[MunitTools::equalTo('53900000001')]"/>
+            <munit-tools:assert-that doc:name="Rejected rows with every reason" expression="#[vars.rejectedRows map { line: $.lineNumber, reasons: $.reasons }]"
+                                     is="#[MunitTools::equalTo([
+                                         { line: 4, reasons: 'INVALID_ABN' },
+                                         { line: 6, reasons: 'INVALID_BSB|INVALID_ACCOUNT_NUMBER|INVALID_AMOUNT' }
+                                     ])]"/>
+            <munit-tools:assert-that doc:name="Summary counts" expression="#[vars.summary - 'completedAt' - 'receivedAt' - 'elapsedMs' - 'archivedAs']"
+                                     is="#[MunitTools::equalTo({
+                                         runId: vars.runId,
+                                         fileName: 'payments_20261020.csv',
+                                         totalRecords: 5,
+                                         loadedRecords: 3,
+                                         loadedAmount: 6170.25,
+                                         rejectedRecords: 2,
+                                         failedRecords: 0,
+                                         status: 'COMPLETED_WITH_REJECTS'
+                                     })]"/>
+            <munit-tools:assert-that doc:name="Rejects CSV header" expression="#[vars.rejectsCsv]"
+                                     is="#[MunitTools::startsWith('line_number,payment_reference,payee_name,payee_abn,bsb,account_number,amount,payment_date,reasons')]"/>
+            <munit-tools:assert-that doc:name="Watermark records the outcome" expression="#[vars.watermark.status]"
+                                     is="#[MunitTools::equalTo('COMPLETED_WITH_REJECTS')]"/>
+            <munit-tools:assert-that doc:name="Run context cleaned up" expression="#[vars.runContextKeys]"
+                                     is="#[MunitTools::isEmpty()]"/>
+            <munit-tools:verify-call doc:name="Archived once" processor="sftp:move" times="1">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="Archive file"/>
+                </munit-tools:with-attributes>
+            </munit-tools:verify-call>
+        </munit:validation>
+    </munit:test>
+
+</mule>

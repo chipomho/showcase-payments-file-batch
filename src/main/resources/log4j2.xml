@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    The pickup flow runs inside tracing:with-correlation-id with the run id, and adds the file
+    name with tracing:set-logging-variable. Batch step and On Complete log lines carry the run
+    id in the message itself.
+-->
+<Configuration>
+    <Appenders>
+        <RollingFile name="file"
+                     fileName="${sys:mule.home}${sys:file.separator}logs${sys:file.separator}payments-file-batch.log"
+                     filePattern="${sys:mule.home}${sys:file.separator}logs${sys:file.separator}payments-file-batch-%i.log">
+            <PatternLayout pattern="%d{ISO8601} %-5p [%t] [correlationId=%X{correlationId}] [fileName=%X{fileName}] %c - %m%n"/>
+            <SizeBasedTriggeringPolicy size="10 MB"/>
+            <DefaultRolloverStrategy max="10"/>
+        </RollingFile>
+    </Appenders>
+
+    <Loggers>
+        <AsyncLogger name="au.chipomho.payments" level="INFO"/>
+        <AsyncLogger name="org.mule.runtime.core.internal.processor.LoggerMessageProcessor" level="INFO"/>
+        <AsyncLogger name="com.mulesoft.mule.runtime.module.batch" level="INFO"/>
+        <AsyncLogger name="org.mule.extension.db" level="WARN"/>
+        <AsyncLogger name="com.mchange.v2" level="WARN"/>
+
+        <AsyncRoot level="INFO">
+            <AppenderRef ref="file"/>
+        </AsyncRoot>
+    </Loggers>
+</Configuration>

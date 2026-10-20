@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xmlns:sftp="http://www.mulesoft.org/schema/mule/sftp"
+      xmlns:os="http://www.mulesoft.org/schema/mule/os"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/sftp http://www.mulesoft.org/schema/mule/sftp/current/mule-sftp.xsd
+        http://www.mulesoft.org/schema/mule/os http://www.mulesoft.org/schema/mule/os/current/mule-os.xsd">
+
+    <!--
+        Errors before the batch job starts. In every case the file is moved out of /inbound so
+        the poller does not pick it up again.
+
+        - Same file name seen before: leave the watermark alone, move the file to /duplicates.
+        - Anything else: if this run claimed the file name, release it so a corrected file
+          with the same name can be sent, then move the file to /error. A claim that belongs
+          to an earlier run is never released; that would allow the same payments twice.
+    -->
+    <error-handler name="file-pickup-error-handler">
+        <on-error-continue doc:name="Duplicate file" type="PAYMENTS:DUPLICATE_FILE" logException="false">
+            <logger level="WARN" category="au.chipomho.payments.pickup"
+                    message="#[output application/json indent=false --- { event: 'file.duplicate', runId: vars.runId, file: vars.file.name }]"/>
+            <set-variable variableName="quarantineDir" value="${sftp.dirs.duplicates}"/>
+            <flow-ref doc:name="Move to duplicates" name="quarantine-file"/>
+        </on-error-continue>
+        <on-error-continue doc:name="File not loaded" type="ANY" logException="true">
+            <logger level="ERROR" category="au.chipomho.payments.pickup"
+                    message="#[output application/json indent=false --- {
+                        event: 'file.failed',
+                        runId: vars.runId default null,
+                        file: vars.file.name default null,
+                        errorType: dw::modules::Errors::errorTypeName(error),
+                        reason: error.description
+                    }]"/>
+            <choice doc:name="Did this run claim the name?">
+                <when expression="#[vars.fileNameClaimed default false]">
+                    <flow-ref doc:name="Release file name" name="release-file-name"/>
+                </when>
+            </choice>
+            <set-variable variableName="quarantineDir" value="${sftp.dirs.error}"/>
+            <flow-ref doc:name="Move to error" name="quarantine-file"/>
+        </on-error-continue>
+    </error-handler>
+
+    <!-- Best effort: a failed move is logged, and the file stays in /inbound for the next poll. -->
+    <flow name="quarantine-file">
+        <sftp:move doc:name="Move file aside" config-ref="sftp-config"
+                   sourcePath="#[vars.file.path]"
+                   targetPath="#[vars.quarantineDir]"
+                   renameTo="#[vars.runId ++ '_' ++ vars.file.name]"
+                   createParentDirectories="true"
+                   overwrite="false"/>
+        <error-handler>
+            <on-error-continue doc:name="Move failed" type="ANY" logException="true">
+                <logger level="WARN" category="au.chipomho.payments.pickup"
+                        message="#[output application/json indent=false --- { event: 'file.move_failed', file: vars.file.name, target: vars.quarantineDir }]"/>
+            </on-error-continue>
+        </error-handler>
+    </flow>
+
+    <flow name="release-file-name">
+        <os:remove doc:name="Release watermark" key="#[vars.file.name]" objectStore="processed-files-store"/>
+        <error-handler>
+            <on-error-continue doc:name="Release failed" type="ANY" logException="true">
+                <logger level="WARN" category="au.chipomho.payments.pickup"
+                        message="#[output application/json indent=false --- { event: 'file.release_failed', file: vars.file.name }]"/>
+            </on-error-continue>
+        </error-handler>
+    </flow>
+
+</mule>

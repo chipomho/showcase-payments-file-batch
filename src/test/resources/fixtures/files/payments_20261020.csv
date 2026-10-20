@@ -1,0 +1,6 @@
+payment_reference,payee_name,payee_abn,bsb,account_number,amount,payment_date,description
+INV-20261020-001,Red Dirt Haulage Pty Ltd,53 900 000 001,062-000,12345678,1520.00,2026-10-21,October haulage
+INV-20261020-002,Spinifex Catering,34900000002,083170,987654321,2650.25,2026-10-21,Camp catering
+INV-20261020-003,Gibber Plains Fuel,12 345 678 901,062-000,11223344,880.00,2026-10-21,Diesel delivery
+INV-20261020-004,Coolabah Tyres,15900000003,062-000,55667788,2000.00,2026-10-22,Tyre service
+INV-20261020-005,Mulga Electrical,85900000004,06-2000,4455,0.00,2026-10-22,Switchboard repair

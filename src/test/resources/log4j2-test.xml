@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Configuration>
+    <Appenders>
+        <Console name="console" target="SYSTEM_OUT">
+            <PatternLayout pattern="%d{HH:mm:ss.SSS} %-5p [correlationId=%X{correlationId}] [fileName=%X{fileName}] %c{1} - %m%n"/>
+        </Console>
+    </Appenders>
+
+    <Loggers>
+        <AsyncLogger name="au.chipomho.payments" level="INFO"/>
+        <AsyncLogger name="org.mule.munit" level="INFO"/>
+        <AsyncLogger name="com.mchange.v2" level="WARN"/>
+
+        <AsyncRoot level="WARN">
+            <AppenderRef ref="console"/>
+        </AsyncRoot>
+    </Loggers>
+</Configuration>

@@ -1,0 +1,158 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xmlns:munit="http://www.mulesoft.org/schema/mule/munit"
+      xmlns:munit-tools="http://www.mulesoft.org/schema/mule/munit-tools"
+      xmlns:os="http://www.mulesoft.org/schema/mule/os"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/munit http://www.mulesoft.org/schema/mule/munit/current/mule-munit.xsd
+        http://www.mulesoft.org/schema/mule/munit-tools http://www.mulesoft.org/schema/mule/munit-tools/current/mule-munit-tools.xsd
+        http://www.mulesoft.org/schema/mule/os http://www.mulesoft.org/schema/mule/os/current/mule-os.xsd">
+
+    <!-- The pickup paths that stop before a batch job is created, and the watermark rules. -->
+    <munit:config name="payments-pickup-test-suite.xml"/>
+
+    <munit:before-test name="payments-pickup-reset" description="Empty object stores">
+        <os:clear doc:name="Clear watermark" objectStore="processed-files-store"/>
+        <os:clear doc:name="Clear run context" objectStore="batch-run-store"/>
+    </munit:before-test>
+
+    <sub-flow name="pickup-mock-moves">
+        <munit-tools:mock-when doc:name="Archive" processor="sftp:move">
+            <munit-tools:with-attributes>
+                <munit-tools:with-attribute attributeName="doc:name" whereValue="Archive file"/>
+            </munit-tools:with-attributes>
+        </munit-tools:mock-when>
+        <munit-tools:mock-when doc:name="Quarantine" processor="sftp:move">
+            <munit-tools:with-attributes>
+                <munit-tools:with-attribute attributeName="doc:name" whereValue="Move file aside"/>
+            </munit-tools:with-attributes>
+        </munit-tools:mock-when>
+    </sub-flow>
+
+    <sub-flow name="pickup-good-file-event">
+        <munit:set-event doc:name="File from the SFTP listener">
+            <munit:payload value="#[MunitTools::getResourceAsString('fixtures/files/payments_20261020.csv')]"
+                           mediaType="application/csv"/>
+            <munit:attributes value="#[{ fileName: 'payments_20261020.csv', path: '/inbound/payments_20261020.csv', size: 641 }]"/>
+        </munit:set-event>
+    </sub-flow>
+
+    <munit:test name="same-file-name-again-goes-to-duplicates"
+                description="A file name already in the watermark store is moved to /duplicates and not loaded">
+        <munit:behavior>
+            <flow-ref doc:name="Mock moves" name="pickup-mock-moves"/>
+            <munit-tools:spy doc:name="Quarantine target" processor="sftp:move">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="Move file aside"/>
+                </munit-tools:with-attributes>
+                <munit-tools:before-call>
+                    <munit-tools:assert-that doc:name="To /duplicates" expression="#[vars.quarantineDir]"
+                                             is="#[MunitTools::equalTo('/duplicates')]"/>
+                </munit-tools:before-call>
+            </munit-tools:spy>
+        </munit:behavior>
+        <munit:execution>
+            <os:store doc:name="Processed last week" key="payments_20261020.csv" objectStore="processed-files-store">
+                <os:value><![CDATA[#[{ runId: 'PAY-20261013-020000-0A1B2C3D', status: 'COMPLETED' }]]]></os:value>
+            </os:store>
+            <flow-ref doc:name="Same file arrives" name="pickup-good-file-event"/>
+            <flow-ref doc:name="payments-file-pickup" name="payments-file-pickup"/>
+            <os:retrieve doc:name="Watermark entry" key="payments_20261020.csv" objectStore="processed-files-store" target="watermark"/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-that doc:name="Earlier run untouched" expression="#[vars.watermark.runId]"
+                                     is="#[MunitTools::equalTo('PAY-20261013-020000-0A1B2C3D')]"/>
+            <munit-tools:verify-call doc:name="Not archived" processor="sftp:move" times="0">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="Archive file"/>
+                </munit-tools:with-attributes>
+            </munit-tools:verify-call>
+            <munit-tools:verify-call doc:name="Moved aside" processor="sftp:move" times="1">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="Move file aside"/>
+                </munit-tools:with-attributes>
+            </munit-tools:verify-call>
+        </munit:validation>
+    </munit:test>
+
+    <munit:test name="file-without-required-columns-goes-to-error"
+                description="A file-level problem moves the file to /error and releases the name so a fixed file can be resent">
+        <munit:behavior>
+            <flow-ref doc:name="Mock moves" name="pickup-mock-moves"/>
+            <munit-tools:spy doc:name="Quarantine target" processor="sftp:move">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="Move file aside"/>
+                </munit-tools:with-attributes>
+                <munit-tools:before-call>
+                    <munit-tools:assert-that doc:name="To /error" expression="#[vars.quarantineDir]"
+                                             is="#[MunitTools::equalTo('/error')]"/>
+                </munit-tools:before-call>
+            </munit-tools:spy>
+        </munit:behavior>
+        <munit:execution>
+            <munit:set-event doc:name="Wrong layout">
+                <munit:payload value="#[MunitTools::getResourceAsString('fixtures/files/payments_wrong_columns.csv')]"
+                               mediaType="application/csv"/>
+                <munit:attributes value="#[{ fileName: 'payments_wrong_columns.csv', path: '/inbound/payments_wrong_columns.csv', size: 120 }]"/>
+            </munit:set-event>
+            <flow-ref doc:name="payments-file-pickup" name="payments-file-pickup"/>
+            <os:contains doc:name="Name still claimed?" key="payments_wrong_columns.csv" objectStore="processed-files-store"
+                         target="claimed"/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-that doc:name="Name released" expression="#[vars.claimed]" is="#[MunitTools::equalTo(false)]"/>
+            <munit-tools:verify-call doc:name="Not archived" processor="sftp:move" times="0">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="Archive file"/>
+                </munit-tools:with-attributes>
+            </munit-tools:verify-call>
+            <munit-tools:verify-call doc:name="Moved to error" processor="sftp:move" times="1">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="Move file aside"/>
+                </munit-tools:with-attributes>
+            </munit-tools:verify-call>
+        </munit:validation>
+    </munit:test>
+
+    <munit:test name="archive-failure-releases-name-and-starts-no-job"
+                description="If the file cannot be archived nothing is loaded and the name is free for the next poll">
+        <munit:behavior>
+            <munit-tools:mock-when doc:name="SFTP down" processor="sftp:move">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="Archive file"/>
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:error typeId="SFTP:CONNECTIVITY"/>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+            <munit-tools:mock-when doc:name="Quarantine fails too" processor="sftp:move">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="Move file aside"/>
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:error typeId="SFTP:CONNECTIVITY"/>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+            <munit-tools:spy doc:name="No job" processor="db:bulk-insert">
+                <munit-tools:before-call>
+                    <munit-tools:fail doc:name="Unexpected load" message="Payments were loaded for a file that was not archived"/>
+                </munit-tools:before-call>
+            </munit-tools:spy>
+        </munit:behavior>
+        <munit:execution>
+            <flow-ref doc:name="Good file" name="pickup-good-file-event"/>
+            <flow-ref doc:name="payments-file-pickup" name="payments-file-pickup"/>
+            <os:contains doc:name="Name still claimed?" key="payments_20261020.csv" objectStore="processed-files-store"
+                         target="claimed"/>
+            <os:retrieve-all-keys doc:name="Run context keys" objectStore="batch-run-store" target="runContextKeys"/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-that doc:name="Name released" expression="#[vars.claimed]" is="#[MunitTools::equalTo(false)]"/>
+            <munit-tools:assert-that doc:name="No run started" expression="#[vars.runContextKeys]" is="#[MunitTools::isEmpty()]"/>
+        </munit:validation>
+    </munit:test>
+
+</mule>

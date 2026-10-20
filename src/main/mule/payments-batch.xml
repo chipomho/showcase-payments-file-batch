@@ -1,0 +1,124 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xmlns:batch="http://www.mulesoft.org/schema/mule/ee/batch"
+      xmlns:db="http://www.mulesoft.org/schema/mule/db"
+      xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/ee/batch http://www.mulesoft.org/schema/mule/ee/batch/current/mule-batch.xsd
+        http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd
+        http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd">
+
+    <!--
+        One job instance per file, with the run id as its instance id. Every record carries
+        its run id, file name and line number, so nothing in the steps depends on flow
+        variables surviving into the job.
+
+        validate-payment never throws; it sets the rejectReasons record variable. The next two
+        steps split on that with acceptExpression, and each writes in blocks of
+        batch.commitSize through a Batch Aggregator and a bulk insert. capture-load-failure
+        picks up records whose block failed to insert, so they are reported rather than lost.
+    -->
+    <flow name="load-payments-batch">
+        <batch:job jobName="payments-load-job" doc:name="Load payments"
+                   jobInstanceId="#[vars.runId]"
+                   blockSize="${batch.blockSize}"
+                   maxConcurrency="${batch.maxConcurrency}"
+                   maxFailedRecords="-1">
+            <batch:process-records>
+                <batch:step name="validate-payment">
+                    <ee:transform doc:name="Validate">
+                        <ee:variables>
+                            <ee:set-variable variableName="rejectReasons"><![CDATA[%dw 2.0
+output application/java
+import validationErrors from dw::modules::Payments
+---
+validationErrors(payload)]]></ee:set-variable>
+                        </ee:variables>
+                    </ee:transform>
+                </batch:step>
+
+                <batch:step name="load-payment" acceptExpression="#[isEmpty(vars.rejectReasons)]">
+                    <batch:aggregator doc:name="Commit block" size="${batch.commitSize}">
+                        <db:bulk-insert doc:name="Bulk insert payments" config-ref="finance-db-config"
+                                        queryTimeout="${db.queryTimeoutSeconds}" queryTimeoutUnit="SECONDS">
+                            <db:bulk-input-parameters><![CDATA[#[%dw 2.0
+output application/java
+import toInsertParameters from dw::modules::Payments
+---
+payload map toInsertParameters($)]]]></db:bulk-input-parameters>
+                            <db:sql><![CDATA[
+                                INSERT INTO payment (run_id, file_name, line_number, payment_reference, payee_name, payee_abn,
+                                                     bsb, account_number, amount, payment_date, description)
+                                VALUES (:runId, :fileName, :lineNumber, :paymentReference, :payeeName, :payeeAbn,
+                                        :bsb, :accountNumber, :amount, CAST(:paymentDate AS DATE), :description)
+                            ]]></db:sql>
+                        </db:bulk-insert>
+                    </batch:aggregator>
+                </batch:step>
+
+                <batch:step name="record-reject" acceptExpression="#[not isEmpty(vars.rejectReasons)]">
+                    <!-- The aggregator only sees record payloads, so the reasons travel in the payload. -->
+                    <ee:transform doc:name="Attach reasons">
+                        <ee:message>
+                            <ee:set-payload><![CDATA[%dw 2.0
+output application/java
+---
+payload ++ { reasons: vars.rejectReasons }]]></ee:set-payload>
+                        </ee:message>
+                    </ee:transform>
+                    <batch:aggregator doc:name="Commit block" size="${batch.commitSize}">
+                        <db:bulk-insert doc:name="Bulk insert rejects" config-ref="finance-db-config"
+                                        queryTimeout="${db.queryTimeoutSeconds}" queryTimeoutUnit="SECONDS">
+                            <db:bulk-input-parameters><![CDATA[#[%dw 2.0
+output application/java
+import toRejectParameters from dw::modules::Payments
+---
+payload map toRejectParameters($)]]]></db:bulk-input-parameters>
+                            <db:sql><![CDATA[
+                                INSERT INTO payment_reject (run_id, file_name, line_number, payment_reference, payee_name,
+                                                            payee_abn, bsb, account_number, amount, payment_date, reasons)
+                                VALUES (:runId, :fileName, :lineNumber, :paymentReference, :payeeName,
+                                        :payeeAbn, :bsb, :accountNumber, :amount, :paymentDate, :reasons)
+                            ]]></db:sql>
+                        </db:bulk-insert>
+                    </batch:aggregator>
+                </batch:step>
+
+                <batch:step name="capture-load-failure" acceptPolicy="ONLY_FAILURES">
+                    <ee:transform doc:name="Reason LOAD_FAILED">
+                        <ee:message>
+                            <ee:set-payload><![CDATA[%dw 2.0
+output application/java
+---
+payload ++ { reasons: ["LOAD_FAILED"] }]]></ee:set-payload>
+                        </ee:message>
+                    </ee:transform>
+                    <batch:aggregator doc:name="Commit block" size="${batch.commitSize}">
+                        <db:bulk-insert doc:name="Bulk insert load failures" config-ref="finance-db-config"
+                                        queryTimeout="${db.queryTimeoutSeconds}" queryTimeoutUnit="SECONDS">
+                            <db:bulk-input-parameters><![CDATA[#[%dw 2.0
+output application/java
+import toRejectParameters from dw::modules::Payments
+---
+payload map toRejectParameters($)]]]></db:bulk-input-parameters>
+                            <db:sql><![CDATA[
+                                INSERT INTO payment_reject (run_id, file_name, line_number, payment_reference, payee_name,
+                                                            payee_abn, bsb, account_number, amount, payment_date, reasons)
+                                VALUES (:runId, :fileName, :lineNumber, :paymentReference, :payeeName,
+                                        :payeeAbn, :bsb, :accountNumber, :amount, :paymentDate, :reasons)
+                            ]]></db:sql>
+                        </db:bulk-insert>
+                    </batch:aggregator>
+                </batch:step>
+            </batch:process-records>
+
+            <batch:on-complete>
+                <flow-ref doc:name="Summary, rejects file, watermark" name="write-run-outcome"/>
+            </batch:on-complete>
+        </batch:job>
+    </flow>
+
+</mule>

@@ -1,0 +1,6 @@
+# Encrypted with the dev key, which is held by the deployment pipeline and never committed.
+# Placeholders only; the pipeline substitutes the real ciphertext.
+sftp:
+  keyPassphrase: "![REPLACE_WITH_ENCRYPTED_KEY_PASSPHRASE]"
+db:
+  password: "![REPLACE_WITH_ENCRYPTED_DB_PASSWORD]"

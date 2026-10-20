@@ -1,0 +1,47 @@
+# Used by MUnit (-Dmule.env=test). The SFTP listener is never started and SFTP and DB operations are mocked.
+sftp:
+  host: "localhost"
+  port: "12222"
+  username: "payments-feed"
+  identityFile: "/opt/mule/keys/payments_feed_ed25519"
+  knownHostsFile: "/opt/mule/keys/known_hosts"
+  connectionTimeoutSeconds: "10"
+  poll:
+    frequencyMs: "60000"
+    # A file must keep the same size across this interval before it is picked up, so a
+    # partly uploaded file is never read.
+    sizeCheckMs: "5000"
+  dirs:
+    inbound: "/inbound"
+    outbound: "/outbound"
+    archive: "/archive"
+    error: "/error"
+    duplicates: "/duplicates"
+  reconnect:
+    frequencyMs: "5000"
+    attempts: "3"
+
+db:
+  host: "localhost"
+  port: "5432"
+  database: "finance_test"
+  user: "payments_loader"
+  queryTimeoutSeconds: "30"
+  pool:
+    minSize: "1"
+    maxSize: "5"
+    maxWaitSeconds: "10"
+  reconnect:
+    frequencyMs: "2000"
+    attempts: "3"
+
+batch:
+  blockSize: "10"
+  commitSize: "10"
+  maxConcurrency: "1"
+
+objectStore:
+  expiryIntervalMinutes: "60"
+  # File names are remembered for longer than any sender would plausibly resend a file.
+  processedFilesTtlDays: "400"
+  runContextTtlDays: "7"
