@@ -11,8 +11,11 @@
         http://www.mulesoft.org/schema/mule/munit-tools http://www.mulesoft.org/schema/mule/munit-tools/current/mule-munit-tools.xsd
         http://www.mulesoft.org/schema/mule/os http://www.mulesoft.org/schema/mule/os/current/mule-os.xsd">
 
-    <!-- The pickup paths that stop before a batch job is created, and the watermark rules. -->
-    <munit:config name="payments-pickup-test-suite.xml"/>
+    <!--
+        file-pickup-error-handler: the pickup paths that stop before a batch job is created,
+        and the watermark rules that go with them.
+    -->
+    <munit:config name="file-pickup-error-handler-test-suite.xml"/>
 
     <munit:before-test name="payments-pickup-reset" description="Empty object stores">
         <os:clear doc:name="Clear watermark" objectStore="processed-files-store"/>

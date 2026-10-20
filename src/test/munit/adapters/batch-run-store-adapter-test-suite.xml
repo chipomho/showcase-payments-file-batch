@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xmlns:munit="http://www.mulesoft.org/schema/mule/munit"
+      xmlns:munit-tools="http://www.mulesoft.org/schema/mule/munit-tools"
+      xmlns:os="http://www.mulesoft.org/schema/mule/os"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/munit http://www.mulesoft.org/schema/mule/munit/current/mule-munit.xsd
+        http://www.mulesoft.org/schema/mule/munit-tools http://www.mulesoft.org/schema/mule/munit-tools/current/mule-munit-tools.xsd
+        http://www.mulesoft.org/schema/mule/os http://www.mulesoft.org/schema/mule/os/current/mule-os.xsd">
+
+    <!-- The run context that On Complete depends on, against the real (test) object store. -->
+    <munit:config name="batch-run-store-adapter-test-suite.xml"/>
+
+    <munit:before-test name="batch-run-store-reset" description="Empty run context store">
+        <os:clear doc:name="Clear run context" objectStore="batch-run-store"/>
+    </munit:before-test>
+
+    <munit:test name="run-context-round-trip" description="save, get and forget under the run id">
+        <munit:execution>
+            <munit:set-event doc:name="Pickup with three records">
+                <munit:payload mediaType="application/java" value="#[[{ lineNumber: 2 }, { lineNumber: 3 }, { lineNumber: 4 }]]"/>
+                <munit:variables>
+                    <munit:variable key="runId" value="PAY-20261020-090000-0A1B2C3D"/>
+                    <munit:variable key="file" mediaType="application/java"
+                                    value="#[{ name: 'payments_20261020.csv', receivedAt: '2026-10-20T09:00:00.000+11:00' }]"/>
+                </munit:variables>
+            </munit:set-event>
+            <flow-ref doc:name="save-run-context" name="save-run-context"/>
+            <flow-ref doc:name="get-run-context" name="get-run-context" target="run"/>
+            <flow-ref doc:name="forget-run-context" name="forget-run-context"/>
+            <os:retrieve-all-keys doc:name="Keys left" objectStore="batch-run-store" target="keysLeft"/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-that doc:name="Saved context" expression="#[vars.run]"
+                                     is="#[MunitTools::equalTo({
+                                         runId: 'PAY-20261020-090000-0A1B2C3D',
+                                         fileName: 'payments_20261020.csv',
+                                         archivedAs: '/archive/PAY-20261020-090000-0A1B2C3D_payments_20261020.csv',
+                                         receivedAt: '2026-10-20T09:00:00.000+11:00',
+                                         rowCount: 3
+                                     })]"/>
+            <munit-tools:assert-that doc:name="Forgotten" expression="#[vars.keysLeft]" is="#[MunitTools::isEmpty()]"/>
+        </munit:validation>
+    </munit:test>
+
+</mule>

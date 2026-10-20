@@ -4,23 +4,10 @@
       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
       xmlns:sftp="http://www.mulesoft.org/schema/mule/sftp"
       xmlns:db="http://www.mulesoft.org/schema/mule/db"
-      xmlns:os="http://www.mulesoft.org/schema/mule/os"
-      xmlns:secure-properties="http://www.mulesoft.org/schema/mule/secure-properties"
       xsi:schemaLocation="
         http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
         http://www.mulesoft.org/schema/mule/sftp http://www.mulesoft.org/schema/mule/sftp/current/mule-sftp.xsd
-        http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd
-        http://www.mulesoft.org/schema/mule/os http://www.mulesoft.org/schema/mule/os/current/mule-os.xsd
-        http://www.mulesoft.org/schema/mule/secure-properties http://www.mulesoft.org/schema/mule/secure-properties/current/mule-secure-properties.xsd">
-
-    <global-property doc:name="Default environment" name="mule.env" value="local"/>
-
-    <configuration-properties doc:name="Environment properties" file="config/config-${mule.env}.yaml"/>
-
-    <secure-properties:config name="secure-properties-config" doc:name="Secure properties"
-                              file="config/secure-config-${mule.env}.yaml" key="${mule.key}">
-        <secure-properties:encrypt algorithm="AES" mode="CBC"/>
-    </secure-properties:config>
+        http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd">
 
     <!-- Key-based authentication with host key checking, as the MFT gateway requires. -->
     <sftp:config name="sftp-config" doc:name="Payments MFT">
@@ -53,27 +40,5 @@
             </reconnection>
         </db:generic-connection>
     </db:config>
-
-    <!--
-        Watermark of processed file names. A pickup claims the name with failIfPresent, so the
-        same file name is processed once even if it is dropped again or two workers poll at once.
-    -->
-    <os:object-store name="processed-files-store" doc:name="Processed file names"
-                     persistent="true"
-                     entryTtl="${objectStore.processedFilesTtlDays}"
-                     entryTtlUnit="DAYS"
-                     expirationInterval="${objectStore.expiryIntervalMinutes}"
-                     expirationIntervalUnit="MINUTES"/>
-
-    <!--
-        The batch job runs asynchronously and its On Complete phase only receives the job
-        result, so the file details it needs are kept here under the run id.
-    -->
-    <os:object-store name="batch-run-store" doc:name="Batch run context"
-                     persistent="true"
-                     entryTtl="${objectStore.runContextTtlDays}"
-                     entryTtlUnit="DAYS"
-                     expirationInterval="${objectStore.expiryIntervalMinutes}"
-                     expirationIntervalUnit="MINUTES"/>
 
 </mule>

@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd">
+
+    <!--
+        Called from the job's On Complete phase, where the payload is the BatchJobResult.
+        Counts and the control total come from the database rather than the job counters,
+        because a record that passed validation but failed to insert is still "processed".
+    -->
+    <flow name="write-run-outcome">
+        <ee:transform doc:name="Job result">
+            <ee:variables>
+                <ee:set-variable variableName="runId"><![CDATA[payload.batchJobInstanceId]]></ee:set-variable>
+                <ee:set-variable variableName="jobResult"><![CDATA[%dw 2.0
+output application/java
+---
+{
+    runId: payload.batchJobInstanceId,
+    totalRecords: payload.totalRecords,
+    successfulRecords: payload.successfulRecords,
+    failedRecords: payload.failedRecords,
+    elapsedMs: payload.elapsedTimeInMillis
+}]]></ee:set-variable>
+            </ee:variables>
+        </ee:transform>
+
+        <flow-ref doc:name="Run context" name="get-run-context" target="run"/>
+
+        <flow-ref doc:name="Loaded totals" name="select-loaded-totals" target="loaded"/>
+
+        <flow-ref doc:name="Rejected rows" name="select-rejected-rows" target="rejects"/>
+
+        <ee:transform doc:name="Summary">
+            <ee:variables>
+                <ee:set-variable variableName="summary" resource="dw/mappings/run-summary.dwl"/>
+            </ee:variables>
+        </ee:transform>
+
+        <flow-ref doc:name="Write summary" name="write-summary-file"/>
+
+        <flow-ref doc:name="Write rejects" name="write-rejects-file"/>
+
+        <flow-ref doc:name="Watermark: record outcome" name="record-file-outcome"/>
+        <flow-ref doc:name="Forget run context" name="forget-run-context"/>
+
+        <logger doc:name="Run complete" level="INFO" category="au.chipomho.payments.batch"
+                message="#[output application/json indent=false --- { event: 'run.completed' } ++ vars.summary]"/>
+
+        <error-handler ref="run-outcome-error-handler"/>
+    </flow>
+
+</mule>

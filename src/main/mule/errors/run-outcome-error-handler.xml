@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd">
+
+    <!-- Referenced by write-run-outcome, which runs in the batch job On Complete phase. -->
+    <error-handler name="run-outcome-error-handler">
+        <!--
+            The payments are already loaded, so there is nothing to roll back. The watermark
+            stays at LOADING, which is what an operator looks for before regenerating the
+            summary from the payment and payment_reject tables.
+        -->
+        <on-error-continue doc:name="Outcome not written" type="ANY" logException="true">
+            <logger level="ERROR" category="au.chipomho.payments.batch"
+                    message="#[output application/json indent=false --- { event: 'run.outcome_failed', runId: vars.jobResult.runId default null }]"/>
+        </on-error-continue>
+    </error-handler>
+
+</mule>

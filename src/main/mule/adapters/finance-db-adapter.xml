@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xmlns:db="http://www.mulesoft.org/schema/mule/db"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd">
+
+    <!-- Finance database adapter: the payment and payment_reject tables. -->
+
+    <!--
+        Reads a block of validated batch records as the payload (from a Batch Aggregator).
+        One batched INSERT per block. Payload out: the update counts.
+    -->
+    <sub-flow name="insert-payments">
+        <db:bulk-insert doc:name="Bulk insert payments" config-ref="finance-db-config"
+                        queryTimeout="${db.queryTimeoutSeconds}" queryTimeoutUnit="SECONDS">
+            <db:bulk-input-parameters><![CDATA[#[%dw 2.0
+output application/java
+import toInsertParameters from dw::modules::Payments
+---
+payload map toInsertParameters($)]]]></db:bulk-input-parameters>
+            <db:sql><![CDATA[
+                INSERT INTO payment (run_id, file_name, line_number, payment_reference, payee_name, payee_abn,
+                                     bsb, account_number, amount, payment_date, description)
+                VALUES (:runId, :fileName, :lineNumber, :paymentReference, :payeeName, :payeeAbn,
+                        :bsb, :accountNumber, :amount, CAST(:paymentDate AS DATE), :description)
+            ]]></db:sql>
+        </db:bulk-insert>
+    </sub-flow>
+
+    <!--
+        Reads a block of rejected batch records, each carrying its reasons, as the payload.
+        Used for validation rejects and for records whose load failed. Payload out: the
+        update counts.
+    -->
+    <sub-flow name="insert-rejects">
+        <db:bulk-insert doc:name="Bulk insert rejects" config-ref="finance-db-config"
+                        queryTimeout="${db.queryTimeoutSeconds}" queryTimeoutUnit="SECONDS">
+            <db:bulk-input-parameters><![CDATA[#[%dw 2.0
+output application/java
+import toRejectParameters from dw::modules::Payments
+---
+payload map toRejectParameters($)]]]></db:bulk-input-parameters>
+            <db:sql><![CDATA[
+                INSERT INTO payment_reject (run_id, file_name, line_number, payment_reference, payee_name,
+                                            payee_abn, bsb, account_number, amount, payment_date, reasons)
+                VALUES (:runId, :fileName, :lineNumber, :paymentReference, :payeeName,
+                        :payeeAbn, :bsb, :accountNumber, :amount, :paymentDate, :reasons)
+            ]]></db:sql>
+        </db:bulk-insert>
+    </sub-flow>
+
+    <!-- Reads vars.runId. Payload out: [{ loaded_count, loaded_amount }], the run's control totals. -->
+    <sub-flow name="select-loaded-totals">
+        <db:select doc:name="Loaded totals" config-ref="finance-db-config"
+                   queryTimeout="${db.queryTimeoutSeconds}" queryTimeoutUnit="SECONDS">
+            <db:sql><![CDATA[
+                SELECT COUNT(*) AS loaded_count, COALESCE(SUM(amount), 0) AS loaded_amount
+                  FROM payment
+                 WHERE run_id = :runId
+            ]]></db:sql>
+            <db:input-parameters><![CDATA[#[{ runId: vars.runId }]]]></db:input-parameters>
+        </db:select>
+    </sub-flow>
+
+    <!-- Reads vars.runId. Payload out: the run's payment_reject rows in line order. -->
+    <sub-flow name="select-rejected-rows">
+        <db:select doc:name="Rejected rows" config-ref="finance-db-config"
+                   queryTimeout="${db.queryTimeoutSeconds}" queryTimeoutUnit="SECONDS">
+            <db:sql><![CDATA[
+                SELECT line_number, payment_reference, payee_name, payee_abn, bsb, account_number,
+                       amount, payment_date, reasons
+                  FROM payment_reject
+                 WHERE run_id = :runId
+                 ORDER BY line_number
+            ]]></db:sql>
+            <db:input-parameters><![CDATA[#[{ runId: vars.runId }]]]></db:input-parameters>
+        </db:select>
+    </sub-flow>
+
+</mule>

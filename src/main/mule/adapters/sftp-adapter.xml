@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xmlns:sftp="http://www.mulesoft.org/schema/mule/sftp"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/sftp http://www.mulesoft.org/schema/mule/sftp/current/mule-sftp.xsd">
+
+    <!--
+        Payments MFT adapter: every move and write on the SFTP server. The polling listener
+        stays in flows/payments-pickup.xml because it is the flow's source.
+        Every sub-flow leaves the payload unchanged.
+    -->
+
+    <!-- Reads vars.file.path, vars.file.name and vars.runId. Moves the file to the archive as <runId>_<name>. -->
+    <sub-flow name="archive-file">
+        <sftp:move doc:name="Archive file" config-ref="sftp-config"
+                   sourcePath="#[vars.file.path]"
+                   targetPath="${sftp.dirs.archive}"
+                   renameTo="#[vars.runId ++ '_' ++ vars.file.name]"
+                   createParentDirectories="true"
+                   overwrite="false"/>
+    </sub-flow>
+
+    <!--
+        Reads vars.file, vars.runId and vars.quarantineDir (/duplicates or /error). Best effort:
+        a failed move is logged and the file stays in /inbound for the next poll, so this flow
+        never fails.
+    -->
+    <flow name="quarantine-file">
+        <sftp:move doc:name="Move file aside" config-ref="sftp-config"
+                   sourcePath="#[vars.file.path]"
+                   targetPath="#[vars.quarantineDir]"
+                   renameTo="#[vars.runId ++ '_' ++ vars.file.name]"
+                   createParentDirectories="true"
+                   overwrite="false"/>
+        <error-handler>
+            <on-error-continue doc:name="Move failed" type="ANY" logException="true">
+                <logger level="WARN" category="au.chipomho.payments.pickup"
+                        message="#[output application/json indent=false --- { event: 'file.move_failed', file: vars.file.name, target: vars.quarantineDir }]"/>
+            </on-error-continue>
+        </error-handler>
+    </flow>
+
+    <!-- Reads vars.run.fileName and vars.summary. Writes <name>.summary.json to /outbound. -->
+    <sub-flow name="write-summary-file">
+        <sftp:write doc:name="Write summary" config-ref="sftp-config" createParentDirectories="true"
+                    path="#[p('sftp.dirs.outbound') ++ '/' ++ dw::modules::Payments::outputFileName(vars.run.fileName, 'summary.json')]">
+            <sftp:content><![CDATA[#[output application/json --- vars.summary]]]></sftp:content>
+        </sftp:write>
+    </sub-flow>
+
+    <!-- Reads vars.run.fileName and vars.rejects (payment_reject rows). Writes <name>.rejects.csv to /outbound. -->
+    <sub-flow name="write-rejects-file">
+        <sftp:write doc:name="Write rejects" config-ref="sftp-config" createParentDirectories="true"
+                    path="#[p('sftp.dirs.outbound') ++ '/' ++ dw::modules::Payments::outputFileName(vars.run.fileName, 'rejects.csv')]">
+            <sftp:content><![CDATA[#[dw::modules::Payments::rejectsCsv(vars.rejects)]]]></sftp:content>
+        </sftp:write>
+    </sub-flow>
+
+</mule>

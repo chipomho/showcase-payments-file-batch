@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xmlns:munit="http://www.mulesoft.org/schema/mule/munit"
+      xmlns:munit-tools="http://www.mulesoft.org/schema/mule/munit-tools"
+      xmlns:os="http://www.mulesoft.org/schema/mule/os"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/munit http://www.mulesoft.org/schema/mule/munit/current/mule-munit.xsd
+        http://www.mulesoft.org/schema/mule/munit-tools http://www.mulesoft.org/schema/mule/munit-tools/current/mule-munit-tools.xsd
+        http://www.mulesoft.org/schema/mule/os http://www.mulesoft.org/schema/mule/os/current/mule-os.xsd">
+
+    <!-- The watermark adapter against the real (test) object store. -->
+    <munit:config name="processed-files-store-adapter-test-suite.xml"/>
+
+    <munit:before-test name="processed-files-store-reset" description="Empty watermark">
+        <os:clear doc:name="Clear watermark" objectStore="processed-files-store"/>
+    </munit:before-test>
+
+    <sub-flow name="watermark-file-event">
+        <munit:set-event doc:name="File context">
+            <munit:payload value="unchanged"/>
+            <munit:variables>
+                <munit:variable key="runId" value="PAY-20261020-090000-0A1B2C3D"/>
+                <munit:variable key="file" mediaType="application/java"
+                                value="#[{ name: 'payments_20261020.csv', path: '/inbound/payments_20261020.csv', receivedAt: '2026-10-20T09:00:00.000+11:00' }]"/>
+            </munit:variables>
+        </munit:set-event>
+    </sub-flow>
+
+    <munit:test name="first-claim-stores-loading" description="The first claim of a name records the run as LOADING">
+        <munit:execution>
+            <flow-ref doc:name="File" name="watermark-file-event"/>
+            <flow-ref doc:name="claim-file-name" name="claim-file-name"/>
+            <os:retrieve doc:name="Entry" key="payments_20261020.csv" objectStore="processed-files-store" target="entry"/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-that doc:name="Entry" expression="#[vars.entry]"
+                                     is="#[MunitTools::equalTo({ runId: 'PAY-20261020-090000-0A1B2C3D', status: 'LOADING', receivedAt: '2026-10-20T09:00:00.000+11:00' })]"/>
+            <munit-tools:assert-that doc:name="Payload untouched" expression="#[payload]" is="#[MunitTools::equalTo('unchanged')]"/>
+        </munit:validation>
+    </munit:test>
+
+    <munit:test name="second-claim-is-a-duplicate-file" description="Claiming a name that is already held raises PAYMENTS:DUPLICATE_FILE"
+                expectedErrorType="PAYMENTS:DUPLICATE_FILE">
+        <munit:execution>
+            <flow-ref doc:name="File" name="watermark-file-event"/>
+            <flow-ref doc:name="First claim" name="claim-file-name"/>
+            <flow-ref doc:name="Second claim" name="claim-file-name"/>
+        </munit:execution>
+    </munit:test>
+
+    <munit:test name="outcome-overwrites-the-claim" description="record-file-outcome replaces LOADING with the run status">
+        <munit:execution>
+            <flow-ref doc:name="File" name="watermark-file-event"/>
+            <flow-ref doc:name="claim-file-name" name="claim-file-name"/>
+            <set-variable variableName="run" value="#[{ runId: 'PAY-20261020-090000-0A1B2C3D', fileName: 'payments_20261020.csv', receivedAt: '2026-10-20T09:00:00.000+11:00' }]"/>
+            <set-variable variableName="summary" value="#[{ status: 'COMPLETED', completedAt: '2026-10-20T09:00:42.000+11:00' }]"/>
+            <flow-ref doc:name="record-file-outcome" name="record-file-outcome"/>
+            <os:retrieve doc:name="Entry" key="payments_20261020.csv" objectStore="processed-files-store" target="entry"/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-that doc:name="Final status" expression="#[vars.entry.status]" is="#[MunitTools::equalTo('COMPLETED')]"/>
+        </munit:validation>
+    </munit:test>
+
+    <munit:test name="release-frees-the-name-and-never-fails" description="A released name can be claimed again; releasing an unknown name is not an error">
+        <munit:execution>
+            <flow-ref doc:name="File" name="watermark-file-event"/>
+            <flow-ref doc:name="claim-file-name" name="claim-file-name"/>
+            <flow-ref doc:name="release-file-name" name="release-file-name"/>
+            <flow-ref doc:name="Release again, nothing there" name="release-file-name"/>
+            <flow-ref doc:name="Claim again" name="claim-file-name"/>
+            <os:contains doc:name="Claimed?" key="payments_20261020.csv" objectStore="processed-files-store" target="claimed"/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-that doc:name="Claimed again" expression="#[vars.claimed]" is="#[MunitTools::equalTo(true)]"/>
+        </munit:validation>
+    </munit:test>
+
+</mule>

@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xmlns:os="http://www.mulesoft.org/schema/mule/os"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/os http://www.mulesoft.org/schema/mule/os/current/mule-os.xsd">
+
+    <!--
+        Run context store. The batch job's On Complete phase only receives the job result, so
+        pickup saves the file details here under the run id and On Complete reads them back.
+        All three sub-flows read vars.runId.
+    -->
+
+    <!-- Also reads vars.file and the payment records payload (for the row count). Payload out: unchanged. -->
+    <sub-flow name="save-run-context">
+        <os:store doc:name="Remember run context" key="#[vars.runId]" objectStore="batch-run-store">
+            <os:value><![CDATA[#[{
+                runId: vars.runId,
+                fileName: vars.file.name,
+                archivedAs: p('sftp.dirs.archive') ++ '/' ++ vars.runId ++ '_' ++ vars.file.name,
+                receivedAt: vars.file.receivedAt,
+                rowCount: sizeOf(payload)
+            }]]]></os:value>
+        </os:store>
+    </sub-flow>
+
+    <!-- Payload out: the saved run context { runId, fileName, archivedAs, receivedAt, rowCount }. -->
+    <sub-flow name="get-run-context">
+        <os:retrieve doc:name="Run context" key="#[vars.runId]" objectStore="batch-run-store"/>
+    </sub-flow>
+
+    <!-- Payload out: unchanged. -->
+    <sub-flow name="forget-run-context">
+        <os:remove doc:name="Forget run context" key="#[vars.runId]" objectStore="batch-run-store"/>
+    </sub-flow>
+
+</mule>

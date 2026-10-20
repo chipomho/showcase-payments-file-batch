@@ -3,13 +3,11 @@
       xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
       xmlns:sftp="http://www.mulesoft.org/schema/mule/sftp"
-      xmlns:os="http://www.mulesoft.org/schema/mule/os"
       xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
       xmlns:tracing="http://www.mulesoft.org/schema/mule/tracing"
       xsi:schemaLocation="
         http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
         http://www.mulesoft.org/schema/mule/sftp http://www.mulesoft.org/schema/mule/sftp/current/mule-sftp.xsd
-        http://www.mulesoft.org/schema/mule/os http://www.mulesoft.org/schema/mule/os/current/mule-os.xsd
         http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd
         http://www.mulesoft.org/schema/mule/tracing http://www.mulesoft.org/schema/mule/tracing/current/mule-tracing.xsd">
 
@@ -59,19 +57,8 @@ output application/java
             <logger doc:name="File received" level="INFO" category="au.chipomho.payments.pickup"
                     message="#[output application/json indent=false --- { event: 'file.received', runId: vars.runId, file: vars.file.name, bytes: vars.file.size }]"/>
 
-            <try doc:name="Claim the file name">
-                <os:store doc:name="Watermark: claim file name" key="#[vars.file.name]" objectStore="processed-files-store"
-                          failIfPresent="true">
-                    <os:value><![CDATA[#[{ runId: vars.runId, status: 'LOADING', receivedAt: vars.file.receivedAt }]]]></os:value>
-                </os:store>
-                <set-variable doc:name="This run owns the name" variableName="fileNameClaimed" value="#[true]"/>
-                <error-handler>
-                    <on-error-propagate doc:name="Seen before" type="OS:KEY_ALREADY_EXISTS" logException="false">
-                        <raise-error doc:name="Duplicate file" type="PAYMENTS:DUPLICATE_FILE"
-                                     description="#['File ' ++ vars.file.name ++ ' has already been processed']"/>
-                    </on-error-propagate>
-                </error-handler>
-            </try>
+            <flow-ref doc:name="Claim the file name" name="claim-file-name"/>
+            <set-variable doc:name="This run owns the name" variableName="fileNameClaimed" value="#[true]"/>
 
             <ee:transform doc:name="CSV rows to payment records">
                 <ee:message>
@@ -92,22 +79,9 @@ fileProblems(payload)]]></ee:set-variable>
                 </when>
             </choice>
 
-            <sftp:move doc:name="Archive file" config-ref="sftp-config"
-                       sourcePath="#[vars.file.path]"
-                       targetPath="${sftp.dirs.archive}"
-                       renameTo="#[vars.runId ++ '_' ++ vars.file.name]"
-                       createParentDirectories="true"
-                       overwrite="false"/>
+            <flow-ref doc:name="Archive file" name="archive-file"/>
 
-            <os:store doc:name="Remember run context" key="#[vars.runId]" objectStore="batch-run-store">
-                <os:value><![CDATA[#[{
-                    runId: vars.runId,
-                    fileName: vars.file.name,
-                    archivedAs: p('sftp.dirs.archive') ++ '/' ++ vars.runId ++ '_' ++ vars.file.name,
-                    receivedAt: vars.file.receivedAt,
-                    rowCount: sizeOf(payload)
-                }]]]></os:value>
-            </os:store>
+            <flow-ref doc:name="Remember run context" name="save-run-context"/>
 
             <flow-ref doc:name="Start batch job" name="load-payments-batch"/>
         </tracing:with-correlation-id>

@@ -3,12 +3,10 @@
       xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
       xmlns:batch="http://www.mulesoft.org/schema/mule/ee/batch"
-      xmlns:db="http://www.mulesoft.org/schema/mule/db"
       xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
       xsi:schemaLocation="
         http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
         http://www.mulesoft.org/schema/mule/ee/batch http://www.mulesoft.org/schema/mule/ee/batch/current/mule-batch.xsd
-        http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd
         http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd">
 
     <!--
@@ -18,7 +16,7 @@
 
         validate-payment never throws; it sets the rejectReasons record variable. The next two
         steps split on that with acceptExpression, and each writes in blocks of
-        batch.commitSize through a Batch Aggregator and a bulk insert. capture-load-failure
+        batch.commitSize through a Batch Aggregator and the finance-db-adapter. capture-load-failure
         picks up records whose block failed to insert, so they are reported rather than lost.
     -->
     <flow name="load-payments-batch">
@@ -42,20 +40,7 @@ validationErrors(payload)]]></ee:set-variable>
 
                 <batch:step name="load-payment" acceptExpression="#[isEmpty(vars.rejectReasons)]">
                     <batch:aggregator doc:name="Commit block" size="${batch.commitSize}">
-                        <db:bulk-insert doc:name="Bulk insert payments" config-ref="finance-db-config"
-                                        queryTimeout="${db.queryTimeoutSeconds}" queryTimeoutUnit="SECONDS">
-                            <db:bulk-input-parameters><![CDATA[#[%dw 2.0
-output application/java
-import toInsertParameters from dw::modules::Payments
----
-payload map toInsertParameters($)]]]></db:bulk-input-parameters>
-                            <db:sql><![CDATA[
-                                INSERT INTO payment (run_id, file_name, line_number, payment_reference, payee_name, payee_abn,
-                                                     bsb, account_number, amount, payment_date, description)
-                                VALUES (:runId, :fileName, :lineNumber, :paymentReference, :payeeName, :payeeAbn,
-                                        :bsb, :accountNumber, :amount, CAST(:paymentDate AS DATE), :description)
-                            ]]></db:sql>
-                        </db:bulk-insert>
+                        <flow-ref doc:name="Bulk insert payments" name="insert-payments"/>
                     </batch:aggregator>
                 </batch:step>
 
@@ -70,20 +55,7 @@ payload ++ { reasons: vars.rejectReasons }]]></ee:set-payload>
                         </ee:message>
                     </ee:transform>
                     <batch:aggregator doc:name="Commit block" size="${batch.commitSize}">
-                        <db:bulk-insert doc:name="Bulk insert rejects" config-ref="finance-db-config"
-                                        queryTimeout="${db.queryTimeoutSeconds}" queryTimeoutUnit="SECONDS">
-                            <db:bulk-input-parameters><![CDATA[#[%dw 2.0
-output application/java
-import toRejectParameters from dw::modules::Payments
----
-payload map toRejectParameters($)]]]></db:bulk-input-parameters>
-                            <db:sql><![CDATA[
-                                INSERT INTO payment_reject (run_id, file_name, line_number, payment_reference, payee_name,
-                                                            payee_abn, bsb, account_number, amount, payment_date, reasons)
-                                VALUES (:runId, :fileName, :lineNumber, :paymentReference, :payeeName,
-                                        :payeeAbn, :bsb, :accountNumber, :amount, :paymentDate, :reasons)
-                            ]]></db:sql>
-                        </db:bulk-insert>
+                        <flow-ref doc:name="Bulk insert rejects" name="insert-rejects"/>
                     </batch:aggregator>
                 </batch:step>
 
@@ -97,20 +69,7 @@ payload ++ { reasons: ["LOAD_FAILED"] }]]></ee:set-payload>
                         </ee:message>
                     </ee:transform>
                     <batch:aggregator doc:name="Commit block" size="${batch.commitSize}">
-                        <db:bulk-insert doc:name="Bulk insert load failures" config-ref="finance-db-config"
-                                        queryTimeout="${db.queryTimeoutSeconds}" queryTimeoutUnit="SECONDS">
-                            <db:bulk-input-parameters><![CDATA[#[%dw 2.0
-output application/java
-import toRejectParameters from dw::modules::Payments
----
-payload map toRejectParameters($)]]]></db:bulk-input-parameters>
-                            <db:sql><![CDATA[
-                                INSERT INTO payment_reject (run_id, file_name, line_number, payment_reference, payee_name,
-                                                            payee_abn, bsb, account_number, amount, payment_date, reasons)
-                                VALUES (:runId, :fileName, :lineNumber, :paymentReference, :payeeName,
-                                        :payeeAbn, :bsb, :accountNumber, :amount, :paymentDate, :reasons)
-                            ]]></db:sql>
-                        </db:bulk-insert>
+                        <flow-ref doc:name="Bulk insert load failures" name="insert-rejects"/>
                     </batch:aggregator>
                 </batch:step>
             </batch:process-records>

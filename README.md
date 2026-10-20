@@ -83,28 +83,39 @@ cannot insert a line twice. `maxFailedRecords="-1"` keeps the job going when a b
   separated by `|` for every rejected row. It is written on every run, header only when
   nothing was rejected, so the sender always gets the same pair of files back.
 
-**Errors and correlation.** `common/error-handling.xml` holds `file-pickup-error-handler`,
-which decides between `/duplicates` and `/error` and handles the watermark release. Moving
-a file aside is best effort; if SFTP is down the file stays in `/inbound` for the next poll.
+**Errors and correlation.** `errors/file-pickup-error-handler.xml` holds
+`file-pickup-error-handler`, which decides between `/duplicates` and `/error` and handles the
+watermark release. Moving a file aside is best effort; if SFTP is down the file stays in `/inbound` for the next poll.
 Pickup runs inside `tracing:with-correlation-id` with the run id and adds the file name to the
 logging context; every log line from the batch and On Complete includes the run id.
 
 ## Project layout
 
+Flows never touch SFTP, the database or an object store themselves: every move, write,
+statement and store operation sits in an adapter with a stated input and output, while the
+SFTP listener, the Batch Job and its aggregators stay in the flows and call the adapters.
+
 ```
 src/main/mule/
-  global.xml                 properties, secure properties, SFTP, database, object stores
-  payments-pickup.xml        scheduled SFTP listener, watermark claim, parse, archive
-  payments-batch.xml         the Batch Job
-  payments-outcome.xml       On Complete: summary, rejects file, watermark update
-  common/error-handling.xml  file-pickup-error-handler, quarantine-file, release-file-name
+  config/global.xml                            properties and secure properties
+  config/connectors.xml                        SFTP and database configs
+  config/object-stores.xml                     watermark and run context stores
+  flows/payments-pickup.xml                    scheduled SFTP listener, watermark claim, parse, archive
+  flows/payments-batch.xml                     the Batch Job
+  flows/payments-outcome.xml                   On Complete: summary, rejects file, watermark update
+  adapters/sftp-adapter.xml                    archive-file, quarantine-file, write-summary-file, write-rejects-file
+  adapters/finance-db-adapter.xml              insert-payments, insert-rejects, select-loaded-totals, select-rejected-rows
+  adapters/processed-files-store-adapter.xml   claim-file-name, record-file-outcome, release-file-name
+  adapters/batch-run-store-adapter.xml         save-run-context, get-run-context, forget-run-context
+  errors/file-pickup-error-handler.xml         /duplicates or /error, and the watermark release
+  errors/run-outcome-error-handler.xml         On Complete failures
 src/main/resources/
-  config/                    config-<env>.yaml and secure-config-<env>.yaml for local, dev and test
-  dw/modules/                Payments (rules, mappings, summary), Errors
-  dw/mappings/               csv-to-payment-records, run-summary
-db/schema.sql                payment and payment_reject tables
-src/test/munit/              MUnit suites
-src/test/resources/fixtures/ payment files and database rows
+  config/                                      config-<env>.yaml and secure-config-<env>.yaml for local, dev and test
+  dw/modules/                                  Payments (rules, mappings, summary), Errors
+  dw/mappings/                                 csv-to-payment-records, run-summary
+db/schema.sql                                  payment and payment_reject tables
+src/test/munit/                                flows/, adapters/, errors/ and dataweave/ suites
+src/test/resources/fixtures/                   payment files and database rows
 ```
 
 ## Running locally
@@ -120,18 +131,24 @@ src/test/resources/fixtures/ payment files and database rows
 
 ## Tests
 
-- `payments-run-test-suite`: a whole run from pickup to On Complete. The batch job is
+The suites mirror the source folders. Flow tests mock the SFTP and database operations inside
+the adapters by `doc:name`, so the adapters run as part of every flow test; the object stores
+are real (in the test runtime) and cleared before each test.
+
+- `flows/payments-run-test-suite`: a whole run from pickup to On Complete. The batch job is
   asynchronous, and an assertion inside a step would only fail that record, so spies copy
   what the bulk inserts and file writes receive onto MUnit queues, and the test asserts on
   them after On Complete has finished: which lines were loaded and rejected and why, the
   summary counts and control total, the rejects file, the final watermark status and the
   cleaned-up run context.
-- `payments-pickup-test-suite`: a repeated file name goes to `/duplicates` and leaves the
-  earlier watermark alone; a file with the wrong columns goes to `/error` and releases its
-  name; an archive failure releases the name and starts no job.
-- `payments-rules-test-suite`: ABN, BSB, amount, date and file-level rules, reject column
-  widths, the header-only rejects file and output file names.
+- `errors/file-pickup-error-handler-test-suite`: a repeated file name goes to `/duplicates`
+  and leaves the earlier watermark alone; a file with the wrong columns goes to `/error` and
+  releases its name; an archive failure releases the name and starts no job.
+- `adapters/`: the watermark claim, duplicate, outcome and release; the run context round
+  trip; a quarantine move that fails without failing its caller.
+- `dataweave/payments-rules-test-suite`: ABN, BSB, amount, date and file-level rules, reject
+  column widths, the header-only rejects file and output file names.
 
-SFTP and database operations are mocked by `doc:name`. Run the suites from Studio or with
+Run the suites from Studio or with
 `mvn clean test`; Batch is an Enterprise feature, so the command-line run needs credentials
 for the MuleSoft EE repository in `settings.xml`.

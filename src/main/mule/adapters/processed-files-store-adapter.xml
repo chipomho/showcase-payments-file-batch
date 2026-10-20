@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xmlns:os="http://www.mulesoft.org/schema/mule/os"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/os http://www.mulesoft.org/schema/mule/os/current/mule-os.xsd">
+
+    <!-- Watermark of processed file names in the persistent processed-files-store. Payload is never changed. -->
+
+    <!--
+        Reads vars.file.name, vars.file.receivedAt and vars.runId. Claims the name atomically
+        (failIfPresent) with status LOADING. Raises PAYMENTS:DUPLICATE_FILE if the name is
+        already claimed, by this or any earlier run.
+    -->
+    <sub-flow name="claim-file-name">
+        <try doc:name="Claim the file name">
+            <os:store doc:name="Watermark: claim file name" key="#[vars.file.name]" objectStore="processed-files-store"
+                      failIfPresent="true">
+                <os:value><![CDATA[#[{ runId: vars.runId, status: 'LOADING', receivedAt: vars.file.receivedAt }]]]></os:value>
+            </os:store>
+            <error-handler>
+                <on-error-propagate doc:name="Seen before" type="OS:KEY_ALREADY_EXISTS" logException="false">
+                    <raise-error doc:name="Duplicate file" type="PAYMENTS:DUPLICATE_FILE"
+                                 description="#['File ' ++ vars.file.name ++ ' has already been processed']"/>
+                </on-error-propagate>
+            </error-handler>
+        </try>
+    </sub-flow>
+
+    <!-- Reads vars.run (fileName, runId, receivedAt) and vars.summary (status, completedAt). Overwrites the entry with the outcome. -->
+    <sub-flow name="record-file-outcome">
+        <os:store doc:name="Watermark: record outcome" key="#[vars.run.fileName]" objectStore="processed-files-store">
+            <os:value><![CDATA[#[{
+                runId: vars.run.runId,
+                status: vars.summary.status,
+                receivedAt: vars.run.receivedAt,
+                completedAt: vars.summary.completedAt
+            }]]]></os:value>
+        </os:store>
+    </sub-flow>
+
+    <!--
+        Reads vars.file.name. Removes the claim so a corrected file with the same name can be
+        sent. Only call it for a name this run claimed. Never fails: it runs inside an error
+        handler and must not replace the error being handled.
+    -->
+    <flow name="release-file-name">
+        <os:remove doc:name="Release watermark" key="#[vars.file.name]" objectStore="processed-files-store"/>
+        <error-handler>
+            <on-error-continue doc:name="Release failed" type="ANY" logException="true">
+                <logger level="WARN" category="au.chipomho.payments.pickup"
+                        message="#[output application/json indent=false --- { event: 'file.release_failed', file: vars.file.name }]"/>
+            </on-error-continue>
+        </error-handler>
+    </flow>
+
+</mule>

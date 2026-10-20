@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xmlns:os="http://www.mulesoft.org/schema/mule/os"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/os http://www.mulesoft.org/schema/mule/os/current/mule-os.xsd">
+
+    <!--
+        Watermark of processed file names. A pickup claims the name with failIfPresent, so the
+        same file name is processed once even if it is dropped again or two workers poll at once.
+    -->
+    <os:object-store name="processed-files-store" doc:name="Processed file names"
+                     persistent="true"
+                     entryTtl="${objectStore.processedFilesTtlDays}"
+                     entryTtlUnit="DAYS"
+                     expirationInterval="${objectStore.expiryIntervalMinutes}"
+                     expirationIntervalUnit="MINUTES"/>
+
+    <!--
+        The batch job runs asynchronously and its On Complete phase only receives the job
+        result, so the file details it needs are kept here under the run id.
+    -->
+    <os:object-store name="batch-run-store" doc:name="Batch run context"
+                     persistent="true"
+                     entryTtl="${objectStore.runContextTtlDays}"
+                     entryTtlUnit="DAYS"
+                     expirationInterval="${objectStore.expiryIntervalMinutes}"
+                     expirationIntervalUnit="MINUTES"/>
+
+</mule>
